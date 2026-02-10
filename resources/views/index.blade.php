@@ -438,3 +438,322 @@
                     `;
                     
                     table.appendChild(row);
+                });
+            }
+
+            updateChart(institutions) {
+                const ctx = document.getElementById('trustChart').getContext('2d');
+                
+                if (this.chart) {
+                    this.chart.destroy();
+                }
+                
+                const scores = institutions.map(i => i.trust_score);
+                const labels = institutions.map(i => i.name.substring(0, 15) + (i.name.length > 15 ? '...' : ''));
+                const colors = institutions.map(i => this.getScoreColor(i.trust_score, true));
+                
+                this.chart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Trust Score',
+                            data: scores,
+                            backgroundColor: colors,
+                            borderColor: 'rgba(255, 255, 255, 0.1)',
+                            borderWidth: 1,
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => `Trust Score: ${context.parsed.y}`
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                                ticks: { color: '#94a3b8' }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { 
+                                    color: '#94a3b8',
+                                    maxRotation: 45
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            setupEventListeners() {
+                // Score sliders
+                ['behavior', 'delay', 'transparency'].forEach(type => {
+                    const slider = document.getElementById(`${type}Score`);
+                    const value = document.getElementById(`${type}Value`);
+                    
+                    slider.addEventListener('input', (e) => {
+                        value.textContent = e.target.value;
+                        this.updateTDIPreview();
+                    });
+                });
+
+                // Institution selection
+                document.getElementById('institutionSelect').addEventListener('change', (e) => {
+                    const selected = e.target.options[e.target.selectedIndex];
+                    const info = document.getElementById('institutionInfo');
+                    
+                    if (selected.value) {
+                        info.classList.remove('hidden');
+                        document.getElementById('currentScore').textContent = selected.dataset.score;
+                        document.getElementById('feedbackCount').textContent = selected.dataset.count;
+                    } else {
+                        info.classList.add('hidden');
+                    }
+                    
+                    this.updateTDIPreview();
+                });
+
+                // Form submission
+                document.getElementById('feedbackForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    await this.submitFeedback();
+                });
+            }
+
+            updateTDIPreview() {
+                const behavior = parseInt(document.getElementById('behaviorScore').value);
+                const delay = parseInt(document.getElementById('delayScore').value);
+                const transparency = parseInt(document.getElementById('transparencyScore').value);
+                
+                // Simple preview calculation (without decay)
+                const previewScore = (behavior * 0.4 + delay * 0.35 + transparency * 0.25) * 10;
+                const rounded = Math.round(previewScore);
+                
+                document.getElementById('tdiPreview').textContent = rounded;
+                document.getElementById('tdiBar').style.width = `${rounded}%`;
+                document.getElementById('tdiBar').className = `score-fill ${this.getScoreClass(rounded)}`;
+            }
+
+            async submitFeedback() {
+                const institutionId = document.getElementById('institutionSelect').value;
+                const behavior = document.getElementById('behaviorScore').value;
+                const delay = document.getElementById('delayScore').value;
+                const transparency = document.getElementById('transparencyScore').value;
+                
+                if (!institutionId || !this.sessionToken) {
+                    alert('Please select an institution');
+                    return;
+                }
+                
+                const submitBtn = document.querySelector('#feedbackForm button[type="submit"]');
+                const submitText = document.getElementById('submitText');
+                const submitLoading = document.getElementById('submitLoading');
+                
+                submitBtn.disabled = true;
+                submitText.classList.add('hidden');
+                submitLoading.classList.remove('hidden');
+                
+                try {
+                    const response = await fetch('/api/feedback', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                        },
+                        body: JSON.stringify({
+                            institution_id: parseInt(institutionId),
+                            behavior_score: parseInt(behavior),
+                            delay_score: parseInt(delay),
+                            transparency_score: parseInt(transparency),
+                            session_token: this.sessionToken
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        this.addUpdate(`Feedback submitted for institution #${institutionId}`);
+                        this.showSuccessMessage(data.message, data.tdi_score);
+                        
+                        // Reset form
+                        document.getElementById('behaviorScore').value = 5;
+                        document.getElementById('delayScore').value = 5;
+                        document.getElementById('transparencyScore').value = 5;
+                        document.getElementById('behaviorValue').textContent = '5';
+                        document.getElementById('delayValue').textContent = '5';
+                        document.getElementById('transparencyValue').textContent = '5';
+                        
+                        // Reload data
+                        await Promise.all([
+                            this.loadInstitutions(),
+                            this.loadAnalytics()
+                        ]);
+                    } else {
+                        throw new Error(data.message || 'Submission failed');
+                    }
+                } catch (error) {
+                    this.showErrorMessage(error.message);
+                    console.error('Error submitting feedback:', error);
+                } finally {
+                    submitBtn.disabled = false;
+                    submitText.classList.remove('hidden');
+                    submitLoading.classList.add('hidden');
+                }
+            }
+
+            showSuccessMessage(message, tdiScore) {
+                const alert = document.createElement('div');
+                alert.className = 'fixed top-24 right-6 glass-card p-4 rounded-xl border border-success/30 bg-success/10 z-50 animate-slide-in';
+                alert.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 rounded-full bg-success/20 flex items-center justify-center">
+                            <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="font-bold">${message}</div>
+                            <div class="text-xs text-brand-muted">TDI Impact: ${tdiScore}</div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(alert);
+                
+                setTimeout(() => {
+                    alert.remove();
+                }, 5000);
+            }
+
+            showErrorMessage(message) {
+                const alert = document.createElement('div');
+                alert.className = 'fixed top-24 right-6 glass-card p-4 rounded-xl border border-brand-danger/30 bg-brand-danger/10 z-50 animate-slide-in';
+                alert.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 rounded-full bg-brand-danger/20 flex items-center justify-center">
+                            <svg class="w-4 h-4 text-brand-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="font-bold">Submission Failed</div>
+                            <div class="text-xs text-brand-muted">${message}</div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(alert);
+                
+                setTimeout(() => {
+                    alert.remove();
+                }, 5000);
+            }
+
+            addUpdate(message) {
+                const container = document.getElementById('recentUpdates');
+                const update = document.createElement('div');
+                update.className = 'flex items-center space-x-3 p-3 bg-white/5 rounded-lg';
+                update.innerHTML = `
+                    <div class="w-2 h-2 bg-brand-accent rounded-full animate-pulse"></div>
+                    <div class="text-sm">${message}</div>
+                    <div class="text-xs text-brand-muted ml-auto">${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                `;
+                
+                container.insertBefore(update, container.firstChild);
+                
+                // Keep only last 5 updates
+                while (container.children.length > 5) {
+                    container.removeChild(container.lastChild);
+                }
+            }
+
+            startLiveUpdates() {
+                // Refresh analytics every 30 seconds
+                setInterval(async () => {
+                    await this.loadAnalytics();
+                    this.addUpdate('Live data refreshed');
+                }, 30000);
+            }
+
+            // Helper methods
+            getScoreClass(score) {
+                if (score >= 70) return 'score-excellent';
+                if (score >= 50) return 'score-good';
+                if (score >= 30) return 'score-warning';
+                return 'score-critical';
+            }
+
+            getScoreColor(score, forChart = false) {
+                if (forChart) {
+                    if (score >= 70) return '#4caf50';
+                    if (score >= 50) return '#00f2ff';
+                    if (score >= 30) return '#ffb74d';
+                    return '#ff2e63';
+                }
+                if (score >= 70) return 'text-success';
+                if (score >= 50) return 'text-brand-accent';
+                if (score >= 30) return 'text-brand-warning';
+                return 'text-brand-danger';
+            }
+
+            getStatusClass(status) {
+                const classes = {
+                    'excellent': 'bg-success/20 text-success',
+                    'good': 'bg-brand-accent/20 text-brand-accent',
+                    'warning': 'bg-brand-warning/20 text-brand-warning',
+                    'critical': 'bg-brand-danger/20 text-brand-danger'
+                };
+                return classes[status] || 'bg-white/10 text-white';
+            }
+
+            timeAgo(date) {
+                const seconds = Math.floor((new Date() - date) / 1000);
+                
+                let interval = seconds / 31536000;
+                if (interval > 1) return Math.floor(interval) + " years ago";
+                
+                interval = seconds / 2592000;
+                if (interval > 1) return Math.floor(interval) + " months ago";
+                
+                interval = seconds / 86400;
+                if (interval > 1) return Math.floor(interval) + " days ago";
+                
+                interval = seconds / 3600;
+                if (interval > 1) return Math.floor(interval) + " hours ago";
+                
+                interval = seconds / 60;
+                if (interval > 1) return Math.floor(interval) + " minutes ago";
+                
+                return Math.floor(seconds) + " seconds ago";
+            }
+        }
+
+        // Initialize the application when DOM is loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            window.tdiApp = new TrustDecayIndex();
+            
+            // Smooth scrolling for navigation
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const target = document.querySelector(this.getAttribute('href'));
+                    if (target) {
+                        target.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start'
+                        });
+                    }
+                });
+            });
+        });
+    </script>
+
+</body>
+</html>
