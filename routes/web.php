@@ -13,6 +13,7 @@ Route::prefix('api')->group(function () {
     Route::get('/modules', [QuantifyController::class, 'getModules']);
     Route::get('/services', [QuantifyController::class, 'getServices']);
     Route::get('/analytics', [QuantifyController::class, 'getAnalytics']);
+    Route::get('/methodology', [QuantifyController::class, 'getMethodology']);
     Route::get('/session-token', [QuantifyController::class, 'generateSessionToken']);
     Route::post('/feedback', [QuantifyController::class, 'submitFeedback']);
 });
